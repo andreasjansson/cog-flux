@@ -1,18 +1,47 @@
+from pathlib import Path
+import math
 import torch
 from einops import rearrange
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
+import matplotlib.pyplot as plt
 
 
-
-def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
+def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor, attention_mask: Tensor | None = None, viz_path: Path | None = None) -> Tensor:
     q, k = apply_rope(q, k, pe)
+
+    if viz_path is not None:
+        visualize_attention(q, k, v, viz_path)
+
     # Only enable flash attention backend
-    with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-        x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    if attention_mask is None:
+        with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    else:
+        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attention_mask)
     x = rearrange(x, "B H L D -> B L (H D)")
 
     return x
+
+
+def visualize_attention(q: Tensor, k: Tensor, v: Tensor, viz_path: Path):
+    return
+    with torch.no_grad():
+        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
+        for i in range(20):
+            viz_path_i = viz_path.parent / (viz_path.name + f"-{i}.png")
+
+            print(f"Writing {viz_path_i}")
+
+            #print(attn_weights.sum([0, 1])[:256].mean(1)[:8])
+            redux_viz = attn_weights.sum([0, 1])[i][256:].reshape([64,64])
+
+            plt.figure(figsize=(5, 5))
+            plt.imshow(redux_viz.to(torch.float32).cpu().numpy())
+            plt.colorbar()
+
+            plt.savefig(viz_path_i)
+            plt.close()
 
 
 def rope(pos: Tensor, dim: int, theta: int) -> Tensor:

@@ -1,3 +1,5 @@
+from pathlib import Path
+import shutil
 import math
 from typing import Callable, Optional
 
@@ -9,6 +11,7 @@ from tqdm.auto import tqdm
 
 from .model import Flux
 from .modules.conditioner import HFEmbedder
+
 
 def get_noise(
     num_samples: int,
@@ -48,6 +51,7 @@ def prepare(
 
     if isinstance(prompt, str):
         prompt = [prompt]
+
     txt = t5(prompt)
     if txt.shape[0] == 1 and bs > 1:
         txt = repeat(txt, "1 ... -> bs ...", bs=bs)
@@ -97,8 +101,11 @@ def prepare_redux(
 
     if isinstance(prompt, str):
         prompt = [prompt]
+
     txt = t5(prompt)
+
     txt = torch.cat((txt, img_cond.to(txt)), dim=-2)
+
     if txt.shape[0] == 1 and bs > 1:
         txt = repeat(txt, "1 ... -> bs ...", bs=bs)
     txt_ids = torch.zeros(bs, txt.shape[1], 3)
@@ -160,7 +167,11 @@ def denoise_single_item(
     compile_run: bool = False,
     image_latents: Optional[Tensor] = None,
     mask: Optional[Tensor] = None,
-    noise: Optional[Tensor] = None
+    noise: Optional[Tensor] = None,
+    redux_single_layers=[],
+    redux_double_layers=[],
+    prompt_single_layers=[],
+    prompt_double_layers=[],
 ):
     img = img.unsqueeze(0)
     img_ids = img_ids.unsqueeze(0)
@@ -178,7 +189,13 @@ def denoise_single_item(
         model = model.to(memory_format=torch.channels_last)
         model = torch.compile(model)
 
-    for t_curr, t_prev in tqdm(zip(timesteps[:-1], timesteps[1:])):
+    attention_viz_dir = Path("/tmp/attention-viz")
+    if attention_viz_dir.exists():
+        shutil.rmtree(attention_viz_dir)
+
+    attention_viz_dir.mkdir()
+
+    for step_index, (t_curr, t_prev) in tqdm(enumerate(zip(timesteps[:-1], timesteps[1:]))):
         t_vec = torch.full((1,), t_curr, dtype=img.dtype, device=img.device)
 
         pred = model(
@@ -189,6 +206,11 @@ def denoise_single_item(
             y=vec,
             timesteps=t_vec,
             guidance=guidance_vec,
+            redux_single_layers=redux_single_layers,
+            redux_double_layers=redux_double_layers,
+            prompt_single_layers=prompt_single_layers,
+            prompt_double_layers=prompt_double_layers,
+            step_index=step_index,
         )
 
         img = img + (t_prev - t_curr) * pred.squeeze(0)
@@ -218,7 +240,11 @@ def denoise(
     compile_run: bool = False,
     image_latents: Optional[Tensor] = None,
     mask: Optional[Tensor] = None,
-    noise: Optional[Tensor] = None
+    noise: Optional[Tensor] = None,
+    redux_single_layers=[],
+    redux_double_layers=[],
+    prompt_single_layers=[],
+    prompt_double_layers=[],
 ):
     batch_size = img.shape[0]
     output_imgs = []
@@ -237,7 +263,11 @@ def denoise(
             compile_run=compile_run,
             image_latents=image_latents,
             mask=mask,
-            noise=None if noise is None else noise[i]
+            noise=None if noise is None else noise[i],
+            redux_single_layers=redux_single_layers,
+            redux_double_layers=redux_double_layers,
+            prompt_single_layers=prompt_single_layers,
+            prompt_double_layers=prompt_double_layers,
         )
         compile_run = False
         output_imgs.append(denoised_img)

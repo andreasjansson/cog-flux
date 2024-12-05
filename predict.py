@@ -449,7 +449,11 @@ class Predictor(BasePredictor):
         height: int = 1024,
         legacy_mask_path: Path = None,  # inpainting for hotswap
         control_image_embedder: ImageEncoder | None = None,
-    ) -> tuple[List[Image.Image], List[np.ndarray]]:
+        redux_single_layers=list(range(38)),
+        redux_double_layers=list(range(19)),
+        prompt_single_layers=list(range(38)),
+        prompt_double_layers=list(range(19)),
+    ) -> tuple[list[Image.Image], list[np.ndarray]]:
         """Run a single prediction on the model"""
         torch_device = torch.device("cuda")
         init_image = None
@@ -530,6 +534,10 @@ class Predictor(BasePredictor):
             timesteps=timesteps,
             guidance=guidance,
             compile_run=self.compile_run,
+            redux_single_layers=redux_single_layers,
+            redux_double_layers=redux_double_layers,
+            prompt_single_layers=prompt_single_layers,
+            prompt_double_layers=prompt_double_layers,
         )
 
         if self.compile_run:
@@ -663,6 +671,10 @@ class Predictor(BasePredictor):
         height: int = 1024,
         control_image_embedder: ImageEncoder | None = None,
         legacy_mask_path: Path | None = None,
+        redux_single_layers=list(range(38)),
+        redux_double_layers=list(range(19)),
+        prompt_single_layers=list(range(38)),
+        prompt_double_layers=list(range(19)),
     ) -> tuple[List[Image.Image], List[np.ndarray]]:
         if go_fast and not self.disable_fp8:
             assert image is None
@@ -694,6 +706,10 @@ class Predictor(BasePredictor):
             height=height,
             legacy_mask_path=legacy_mask_path,
             control_image_embedder=control_image_embedder,
+            redux_single_layers=redux_single_layers,
+            redux_double_layers=redux_double_layers,
+            prompt_single_layers=prompt_single_layers,
+            prompt_double_layers=prompt_double_layers,
         )
 
     def prepare_init_image(self, image_path: Path) -> tuple[torch.Tensor, int, int]:
@@ -811,7 +827,8 @@ class Predictor(BasePredictor):
 
 class SchnellPredictor(Predictor):
     def setup(self) -> None:
-        self.base_setup(FLUX_SCHNELL, compile_fp8=True)
+        # self.base_setup(FLUX_SCHNELL, compile_fp8=True)
+        self.base_setup(FLUX_SCHNELL, compile_fp8=False, disable_fp8=True)
 
     def predict(
         self,
@@ -827,6 +844,15 @@ class SchnellPredictor(Predictor):
         disable_safety_checker: bool = Inputs.disable_safety_checker,
         go_fast: bool = Inputs.go_fast,
         megapixels: str = Inputs.megapixels,
+        prompt_double_layers: list[int] = Input(
+            description="Single stream block layers where prompt is enabled. 0-37",
+            default=list(range(19)),
+        ),
+        prompt_single_layers: list[int] = Input(
+            description="Single stream block layers where prompt is enabled. 0-37",
+            default=list(range(38)),
+        ),
+
     ) -> List[Path]:
         width, height = self.size_from_aspect_megapixels(aspect_ratio, megapixels)
         imgs, np_imgs = self.shared_predict(
@@ -837,6 +863,8 @@ class SchnellPredictor(Predictor):
             seed=seed,
             width=width,
             height=height,
+            prompt_double_layers=prompt_double_layers,
+            prompt_single_layers=prompt_single_layers,
         )
 
         return self.postprocess(
@@ -1036,6 +1064,7 @@ class SchnellReduxPredictor(_ReduxPredictor):
 
     def predict(
         self,
+        prompt: str = Inputs.prompt,
         redux_image: Path = Input(
             description="Input image to condition your output on. This replaces prompt for FLUX.1 Redux models",
         ),
@@ -1052,9 +1081,23 @@ class SchnellReduxPredictor(_ReduxPredictor):
         output_quality: int = Inputs.output_quality,
         disable_safety_checker: bool = Inputs.disable_safety_checker,
         megapixels: str = Inputs.megapixels,
+        redux_double_layers: list[int] = Input(
+            description="Double stream block layers where redux image is enabled. 0-18",
+            default=list(range(19)),
+        ),
+        redux_single_layers: list[int] = Input(
+            description="Single stream block layers where redux image is enabled. 0-37",
+            default=list(range(38)),
+        ),
     ) -> List[Path]:
         go_fast = False
-        prompt = ""
+
+        assert all(
+            [0 <= i <= 18 for i in redux_double_layers]
+        ), "all layers in redux_double_layers must be 0 <= layer <= 18"
+        assert all(
+            [0 <= i <= 37 for i in redux_single_layers]
+        ), "all layers in redux_single_layers must be 0 <= layer <= 37"
 
         # TODO: don't love passing this via a class variable, but it's better than totally breaking our abstractions.
         self.cur_prediction_redux_img = redux_image
@@ -1068,6 +1111,10 @@ class SchnellReduxPredictor(_ReduxPredictor):
             seed=seed,
             width=width,
             height=height,
+            redux_single_layers=redux_single_layers,
+            redux_double_layers=redux_double_layers,
+            prompt_single_layers=prompt_single_layers,
+            prompt_double_layers=prompt_double_layers,
         )
 
         return self.postprocess(
